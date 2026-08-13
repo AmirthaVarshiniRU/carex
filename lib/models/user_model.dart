@@ -10,6 +10,7 @@ class UserModel {
   final Map<String, bool>? connectedAccounts;
   final Map<String, bool>? privacySettings;
   final String? role;
+  final String? currentMood;
 
   UserModel({
     required this.uid,
@@ -23,6 +24,7 @@ class UserModel {
     this.connectedAccounts,
     this.privacySettings,
     this.role,
+    this.currentMood,
   });
 
   factory UserModel.fromJson(Map<String, dynamic> json) {
@@ -42,6 +44,7 @@ class UserModel {
           ? Map<String, bool>.from(json['privacySettings']) 
           : null,
       role: json['role'],
+      currentMood: json['currentMood'],
     );
   }
 
@@ -58,6 +61,7 @@ class UserModel {
       'connectedAccounts': connectedAccounts,
       'privacySettings': privacySettings,
       'role': role,
+      'currentMood': currentMood,
     };
   }
 
@@ -70,6 +74,7 @@ class UserModel {
     Map<String, bool>? connectedAccounts,
     Map<String, bool>? privacySettings,
     String? role,
+    String? currentMood,
   }) {
     return UserModel(
       uid: this.uid,
@@ -83,6 +88,7 @@ class UserModel {
       connectedAccounts: connectedAccounts ?? this.connectedAccounts,
       privacySettings: privacySettings ?? this.privacySettings,
       role: role ?? this.role,
+      currentMood: currentMood ?? this.currentMood,
     );
   }
 }

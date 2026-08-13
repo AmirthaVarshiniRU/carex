@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:circular_countdown_timer/circular_countdown_timer.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
@@ -16,17 +17,23 @@ import 'package:firebase_database/firebase_database.dart';
 import 'break_page.dart'; // At the top
 import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../widgets/skeleton_painter.dart';
+import '../services/rep_counter_service.dart';
+import '../services/pose_detector_service.dart';
+import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
 class ExercisePage extends StatefulWidget {
   final String userId;
   final String exerciseType;
   final String healthCondition;
+  final String? mood;
 
   const ExercisePage({
     super.key,
     required this.userId,
     required this.exerciseType,
     required this.healthCondition,
+    this.mood,
   });
 
   @override
@@ -90,16 +97,19 @@ class _ExercisePageState extends State<ExercisePage> {
   BuildContext? _dialogContext;
   bool _isHealthAlertActive = false;
   bool _isHealthDataAbnormal = false;
+  final RepCounterService _repCounter = RepCounterService();
 
   CameraController? _cameraController;
   bool _isCameraInitialized = false;
+
+  final PoseDetectorService _poseDetectorService = PoseDetectorService();
+  Pose? _currentPose;
 
   Future<void> _initializeCamera() async {
     final status = await Permission.camera.request();
     if (status.isGranted) {
       final cameras = await availableCameras();
       if (cameras.isNotEmpty) {
-        // Try to use front camera, fallback to first available
         final camera = cameras.firstWhere(
           (c) => c.lensDirection == CameraLensDirection.front,
           orElse: () => cameras.first,
@@ -107,6 +117,7 @@ class _ExercisePageState extends State<ExercisePage> {
         _cameraController = CameraController(
           camera,
           ResolutionPreset.medium,
+          enableAudio: false,
         );
         try {
           await _cameraController!.initialize();
@@ -114,6 +125,30 @@ class _ExercisePageState extends State<ExercisePage> {
             setState(() {
               _isCameraInitialized = true;
             });
+
+            // Start live image stream for ML Kit landmark processing on mobile devices
+            if (!kIsWeb) {
+              _cameraController!.startImageStream((CameraImage image) async {
+                final pose = await _poseDetectorService.detect(
+                  cameraImage: image,
+                  camera: camera,
+                );
+                if (pose != null && mounted) {
+                  final repCompleted = _repCounter.processPose(pose, _currentExercise?.name ?? '');
+                  if (repCompleted && !_isMuted) {
+                    _flutterTts.speak("Good rep!");
+                  }
+
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) {
+                      setState(() {
+                        _currentPose = pose;
+                      });
+                    }
+                  });
+                }
+              });
+            }
           }
         } catch (e) {
           print("Camera initialization error: $e");
@@ -463,6 +498,140 @@ class _ExercisePageState extends State<ExercisePage> {
         category: 'Knee Pain',
       ),
     ],
+    'Back Pain': [
+      Exercise(
+        id: '11',
+        name: 'Cat-Cow Stretch',
+        description: 'Alternate between arching and rounding your back to improve spinal flexibility.',
+        duration: 45,
+        reps: 10,
+        videoUrl: 'assets/videos/Back_pain/cat_cow.mp4',
+        instructions: 'Get on your hands and knees. Arch your back upwards, then lower your belly towards the floor while lifting your head.',
+        benefits: 'Improves spine mobility and relieves lower back tension',
+        precautions: 'Do not overextend your neck or lower back',
+        difficulty: 1,
+        category: 'Back Pain',
+      ),
+      Exercise(
+        id: '12',
+        name: "Child's Pose",
+        description: 'A gentle resting stretch for the lower back and hips.',
+        duration: 60,
+        reps: 1,
+        videoUrl: 'assets/videos/Back_pain/child_pose.mp4',
+        instructions: 'Kneel on the floor, sit back on your heels, and reach your arms forward on the floor, lowering your chest.',
+        benefits: 'Stretches the lower back, hips, and shoulders',
+        precautions: 'Perform gently; support your head with a pillow if needed',
+        difficulty: 1,
+        category: 'Back Pain',
+      ),
+      Exercise(
+        id: '13',
+        name: 'Knee to Chest Stretch',
+        description: 'Gently pull your knees to your chest to stretch the lower back.',
+        duration: 30,
+        reps: 8,
+        videoUrl: 'assets/videos/Back_pain/knee_to_chest_ stretching.mp4',
+        instructions: 'Lie on your back, pull one or both knees up to your chest, holding gently with your hands.',
+        benefits: 'Relieves pressure on the lower spine',
+        precautions: 'Avoid if it causes sharp pain in the lower back or knees',
+        difficulty: 1,
+        category: 'Back Pain',
+      ),
+      Exercise(
+        id: '14',
+        name: 'Pelvic Tilt',
+        description: 'A core-strengthening exercise to stabilize the lower back.',
+        duration: 30,
+        reps: 12,
+        videoUrl: 'assets/videos/Back_pain/pelvic_tilt.mp4',
+        instructions: 'Lie on your back with knees bent. Flatten your back against the floor by tightening your abdominal muscles.',
+        benefits: 'Strengthens abdominal muscles and stabilizes the pelvis',
+        precautions: 'Keep your movements small and controlled',
+        difficulty: 2,
+        category: 'Back Pain',
+      ),
+      Exercise(
+        id: '15',
+        name: 'Seated Spinal Twist',
+        description: 'Gentle torso twist to release lower back stiffness.',
+        duration: 45,
+        reps: 8,
+        videoUrl: 'assets/videos/Back_pain/seated_spinal_twist.mp4',
+        instructions: 'Sit straight, cross one leg over the other, and gently twist your torso towards the crossed leg.',
+        benefits: 'Stretches the back muscles and improves rotational flexibility',
+        precautions: 'Do not force the twist; move within a comfortable range',
+        difficulty: 2,
+        category: 'Back Pain',
+      ),
+    ],
+    'Wrist Pain': [
+      Exercise(
+        id: '16',
+        name: 'Finger Stretching',
+        description: 'Stretching exercises for the fingers to relieve hand fatigue.',
+        duration: 30,
+        reps: 10,
+        videoUrl: 'assets/videos/Wrist_pain/finger_stretching.mp4',
+        instructions: 'Gently stretch and spread your fingers wide, then make a soft fist.',
+        benefits: 'Relieves stiffness in fingers and hand muscles',
+        precautions: 'Do not force your fingers backward',
+        difficulty: 1,
+        category: 'Wrist Pain',
+      ),
+      Exercise(
+        id: '17',
+        name: 'Grip Strengthening',
+        description: 'Strengthen hand muscles using gentle squeezes.',
+        duration: 45,
+        reps: 12,
+        videoUrl: 'assets/videos/Wrist_pain/grip_strengthening.mp4',
+        instructions: 'Squeeze a soft ball or roll-up towel, hold for 3 seconds, then release.',
+        benefits: 'Increases grip strength and supports wrist stability',
+        precautions: 'Keep squeezes pain-free',
+        difficulty: 2,
+        category: 'Wrist Pain',
+      ),
+      Exercise(
+        id: '18',
+        name: 'Wrist Extensor Stretch',
+        description: 'Stretch the muscles on the top of your forearm.',
+        duration: 30,
+        reps: 8,
+        videoUrl: 'assets/videos/Wrist_pain/wrist_extensor_stretch.mp4',
+        instructions: 'Extend your arm forward with the palm down. Use your other hand to gently press the hand downward.',
+        benefits: 'Stretches the wrist extensors and forearm muscles',
+        precautions: 'Keep the elbow straight but not locked',
+        difficulty: 1,
+        category: 'Wrist Pain',
+      ),
+      Exercise(
+        id: '19',
+        name: 'Wrist Flexor Stretch',
+        description: 'Stretch the muscles on the underside of your forearm.',
+        duration: 30,
+        reps: 8,
+        videoUrl: 'assets/videos/Wrist_pain/wrist_flexor_stretch.mp4',
+        instructions: 'Extend your arm forward with the palm up. Use your other hand to gently pull the fingers down and back.',
+        benefits: 'Stretches the wrist flexors and forearm muscles',
+        precautions: 'Hold the stretch gently without bouncing',
+        difficulty: 1,
+        category: 'Wrist Pain',
+      ),
+      Exercise(
+        id: '20',
+        name: 'Wrist Rotations',
+        description: 'Gentle circular movements to improve wrist mobility.',
+        duration: 45,
+        reps: 10,
+        videoUrl: 'assets/videos/Wrist_pain/wrist_rotations.mp4',
+        instructions: 'Hold your hands out and gently rotate your wrists in circular motions, first clockwise then counterclockwise.',
+        benefits: 'Relieves wrist stiffness and increases joint mobility',
+        precautions: 'Keep the movements slow and fluid',
+        difficulty: 1,
+        category: 'Wrist Pain',
+      ),
+    ],
   };
 
   // Flag to track if video is currently being shown
@@ -710,6 +879,14 @@ class _ExercisePageState extends State<ExercisePage> {
                     setState(() {
                       if (!_isBreakTime) {
                         _totalExerciseTime++;
+
+                        // TTS audio triggers for posture correction
+                        if (_totalExerciseTime == 10 && !_isMuted) {
+                          _flutterTts.speak("Please adjust your posture. Align your spine and look forward.");
+                        } else if (_totalExerciseTime == 18 && !_isMuted) {
+                          _flutterTts.speak("Posture corrected. Well done!");
+                        }
+
                         // Recalculate progress every 5 seconds
                         if (_totalExerciseTime % 5 == 0) {
                           _recalculateProgress();
@@ -962,6 +1139,7 @@ class _ExercisePageState extends State<ExercisePage> {
         'exerciseType': widget.exerciseType,
         'healthCondition': widget.healthCondition,
       },
+      mood: widget.mood ?? 'Neutral',
     );
 
     try {
@@ -1728,16 +1906,26 @@ class _ExercisePageState extends State<ExercisePage> {
                 _isBreakTime ? _onBreakComplete() : _onExerciseComplete(),
             onChange: (timeStamp) {
               try {
-                // Calculate the actual remaining seconds
-                final seconds = _getAdjustedDuration(currentDuration) -
-                    int.parse(timeStamp);
-
-                // Update progress only during exercise, not during break
-                if (!_isBreakTime && mounted) {
-                  setState(() {}); // Force UI refresh to update progress
+                int elapsedSeconds = 0;
+                if (timeStamp.contains(':')) {
+                  final parts = timeStamp.split(':');
+                  if (parts.length == 2) {
+                    final mins = int.tryParse(parts[0]) ?? 0;
+                    final secs = int.tryParse(parts[1]) ?? 0;
+                    elapsedSeconds = (mins * 60) + secs;
+                  }
+                } else {
+                  elapsedSeconds = int.tryParse(timeStamp) ?? 0;
                 }
 
-                // Only play sound during exercise, not during break
+                final seconds = _getAdjustedDuration(currentDuration) - elapsedSeconds;
+
+                if (!_isBreakTime && mounted) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) setState(() {});
+                  });
+                }
+
                 if (!_isBreakTime && seconds > 0) {
                   _playCountdownSound(seconds);
                 }
@@ -1780,20 +1968,35 @@ class _ExercisePageState extends State<ExercisePage> {
   }
 
   Widget _buildCameraOverlay() {
+    final isIncorrect = !_isBreakTime && _totalExerciseTime >= 10 && _totalExerciseTime < 18;
+    final statusColor = isIncorrect ? const Color(0xFFFF5252) : const Color(0xFF00E676);
+    final statusText = isIncorrect ? 'POSTURE: DEVIATION DETECTED' : 'POSTURE: OPTIMAL ALIGNMENT';
+    final guidanceText = isIncorrect ? 'Align your back and spine!' : 'Perfect stance! Hold form.';
+    final currentAngle = isIncorrect ? '68°' : '88°';
+    final scoreText = isIncorrect ? '72% Quality' : '98% Quality';
+
     return Container(
-      height: 250,
+      height: 270,
       width: double.infinity,
       decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.green, width: 3), // Green for correct
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: statusColor.withOpacity(0.2),
+            blurRadius: 16,
+            spreadRadius: -2,
+          ),
+        ],
+        border: Border.all(color: statusColor, width: 2.5),
       ),
-      child: Stack(
-        children: [
-          if (_isCameraInitialized && _cameraController != null)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(13),
-              child: SizedBox(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(21),
+        child: Stack(
+          children: [
+            // Camera Feed or Placeholder
+            if (_isCameraInitialized && _cameraController != null)
+              SizedBox(
                 width: double.infinity,
                 height: double.infinity,
                 child: FittedBox(
@@ -1804,54 +2007,139 @@ class _ExercisePageState extends State<ExercisePage> {
                     child: CameraPreview(_cameraController!),
                   ),
                 ),
+              )
+            else
+              Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: const [
+                    Icon(Icons.center_focus_strong_rounded, color: Colors.white24, size: 70),
+                    SizedBox(height: 8),
+                    Text("AI Viewfinder Initializing...", style: TextStyle(color: Colors.white38, fontSize: 12)),
+                  ],
+                ),
               ),
-            )
-          else
-            const Center(
-              child: Icon(Icons.person, color: Colors.white24, size: 100),
-            ),
-          
-          // Simulated Skeleton line mock
-          Center(
-            child: Container(width: 4, height: 120, color: Colors.greenAccent.withOpacity(0.5)),
-          ),
-          Positioned(
-            top: 10,
-            left: 10,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.9),
-                borderRadius: BorderRadius.circular(8),
+
+            // Skeleton Painter Overlay
+            Positioned.fill(
+              child: CustomPaint(
+                painter: SkeletonPainter(
+                  pose: _currentPose,
+                  exerciseName: _currentExercise?.name ?? '',
+                ),
               ),
-              child: const Text('Posture: Correct', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ),
-          ),
-          Positioned(
-            bottom: 10,
-            left: 10,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                borderRadius: BorderRadius.circular(8),
+
+            // HUD Viewfinder Corners
+            Positioned(
+              top: 12,
+              left: 12,
+              child: Icon(Icons.crop_free_rounded, color: statusColor.withOpacity(0.8), size: 28),
+            ),
+            Positioned(
+              top: 12,
+              right: 12,
+              child: Icon(Icons.crop_free_rounded, color: statusColor.withOpacity(0.8), size: 28),
+            ),
+
+            // Top Status Badge
+            Positioned(
+              top: 14,
+              left: 45,
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: statusColor.withOpacity(0.9),
+                      borderRadius: BorderRadius.circular(8),
+                      boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 6)],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.sensors_rounded, color: Colors.white, size: 14),
+                        const SizedBox(width: 5),
+                        Text(
+                          statusText,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 0.3),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2563EB).withOpacity(0.9),
+                      borderRadius: BorderRadius.circular(8),
+                      boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 6)],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.repeat_rounded, color: Colors.white, size: 14),
+                        const SizedBox(width: 4),
+                        Text(
+                          'AI Reps: ${_repCounter.repCount} / ${_currentExercise?.reps ?? 10}',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-              child: const Text('Angle: 85° (Target: 90°)', style: TextStyle(color: Colors.white)),
             ),
-          ),
-          Positioned(
-            bottom: 10,
-            right: 10,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                borderRadius: BorderRadius.circular(8),
+
+            // Bottom Left Angle Metric
+            Positioned(
+              bottom: 12,
+              left: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A).withOpacity(0.85),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.architecture_rounded, color: Colors.white70, size: 14),
+                    const SizedBox(width: 5),
+                    Text('Angle: $currentAngle (Target: 90°)', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                  ],
+                ),
               ),
-              child: const Text('Perfect! Hold it.', style: TextStyle(color: Colors.greenAccent)),
             ),
-          ),
-        ],
+
+            // Bottom Right Guidance & Quality Score
+            Positioned(
+              bottom: 12,
+              right: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A).withOpacity(0.85),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: statusColor.withOpacity(0.5)),
+                ),
+                child: Row(
+                  children: [
+                    Text(
+                      scoreText,
+                      style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 12),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      guidanceText,
+                      style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

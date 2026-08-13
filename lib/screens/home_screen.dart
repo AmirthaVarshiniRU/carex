@@ -8,6 +8,10 @@ import 'health_screen.dart' as health;
 import 'about_screen.dart';
 import 'help_support_screen.dart';
 import 'Rate.dart';
+import '../widgets/ai_assistant_sheet.dart';
+import '../models/medication.dart';
+import '../services/medication_service.dart';
+import '../widgets/add_medication_dialog.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -31,12 +35,27 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  void _openAIAssistant() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => const AIAssistantSheet(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       extendBody: true,
       backgroundColor: const Color(0xFFF8FAFC),
       body: _screens[_selectedIndex],
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openAIAssistant,
+        backgroundColor: const Color(0xFF0F172A),
+        icon: const Icon(Icons.smart_toy_rounded, color: Colors.tealAccent),
+        label: const Text("AI Assistant", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      ),
       bottomNavigationBar: Container(
         margin: const EdgeInsets.only(left: 20, right: 20, bottom: 20),
         decoration: BoxDecoration(
@@ -64,7 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
             showUnselectedLabels: false,
             items: [
               BottomNavigationBarItem(
-                icon: Icon(Icons.fitness_center_outlined, size: 28),
+                icon: const Icon(Icons.fitness_center_outlined, size: 28),
                 activeIcon: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
@@ -76,7 +95,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 label: 'Plan',
               ),
               BottomNavigationBarItem(
-                icon: Icon(Icons.show_chart, size: 28),
+                icon: const Icon(Icons.show_chart, size: 28),
                 activeIcon: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
@@ -88,7 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 label: 'Progress',
               ),
               BottomNavigationBarItem(
-                icon: Icon(Icons.person_outline, size: 28),
+                icon: const Icon(Icons.person_outline, size: 28),
                 activeIcon: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
@@ -107,126 +126,222 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-class DashboardTab extends StatelessWidget {
+// ─────────────────────────────────────────────────────────────────────────────
+// DashboardTab
+// ─────────────────────────────────────────────────────────────────────────────
+
+class DashboardTab extends StatefulWidget {
   const DashboardTab({super.key});
+
+  @override
+  State<DashboardTab> createState() => _DashboardTabState();
+}
+
+class _DashboardTabState extends State<DashboardTab> {
+  final MedicationService _medicationService = MedicationService();
+  List<Medication> _medications = [];
+  int _waterGlasses = 4;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMedications();
+  }
+
+  Future<void> _loadMedications() async {
+    final list = await _medicationService.getMedications();
+    if (mounted) {
+      setState(() {
+        _medications = list;
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _toggleMedication(String id) async {
+    final updated = await _medicationService.toggleTaken(id);
+    if (mounted) {
+      setState(() => _medications = updated);
+    }
+  }
+
+  void _addMedication() async {
+    final result = await showModalBottomSheet<Medication>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => const AddMedicationDialog(),
+    );
+
+    if (result != null) {
+      final updated = await _medicationService.addMedication(result);
+      if (mounted) {
+        setState(() => _medications = updated);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final user = Provider.of<AuthProvider>(context).user;
-    
+    final takenCount = _medications.where((m) => m.isTaken).length;
+    final totalCount = _medications.length;
+    final medProgress = totalCount > 0 ? takenCount / totalCount : 0.0;
+
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.only(left: 20.0, right: 20.0, top: 30.0, bottom: 100.0),
         children: [
-          // Greeting Header
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Good Morning,',
-                    style: TextStyle(fontSize: 16, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
-                  ),
+                  Text('Good Day,', style: TextStyle(fontSize: 16, color: Colors.grey.shade600, fontWeight: FontWeight.w500)),
                   const SizedBox(height: 4),
-                  Text(
-                    user?.displayName ?? 'User!',
-                    style: const TextStyle(
-                      fontSize: 28, 
-                      fontWeight: FontWeight.w800,
-                      color: Color(0xFF1E293B),
-                      letterSpacing: -0.5,
-                    ),
-                  ),
+                  Text(user?.displayName ?? 'CareX User', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: Color(0xFF1E293B), letterSpacing: -0.5)),
                 ],
               ),
-              CircleAvatar(
-                radius: 28,
-                backgroundColor: const Color(0xFF059669).withOpacity(0.1),
-                child: const Icon(Icons.person, color: Color(0xFF059669), size: 30),
-              )
+              CircleAvatar(radius: 26, backgroundColor: const Color(0xFF059669).withOpacity(0.12), child: const Icon(Icons.person, color: Color(0xFF059669), size: 28))
             ],
           ),
-          const SizedBox(height: 30),
-          
-          // Stats Grid
+          const SizedBox(height: 24),
           Row(
             children: [
-              Expanded(child: _buildProgressMetricCard()),
-              const SizedBox(width: 16),
-              Expanded(child: _buildStreakCard()),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 15, offset: const Offset(0, 8))]),
+                  child: Column(
+                    children: [
+                      Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          SizedBox(
+                            height: 64,
+                            width: 64,
+                            child: CircularProgressIndicator(value: (medProgress * 0.5 + 0.45).clamp(0.0, 1.0), strokeWidth: 7, backgroundColor: const Color(0xFF059669).withOpacity(0.1), color: const Color(0xFF059669)),
+                          ),
+                          Text('${((medProgress * 50) + 48).round()}%', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF1E293B))),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      const Text('Recovery Score', style: TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFF059669), Color(0xFF047857)], begin: Alignment.topLeft, end: Alignment.bottomRight), borderRadius: BorderRadius.circular(24), boxShadow: [BoxShadow(color: const Color(0xFF059669).withOpacity(0.3), blurRadius: 15, offset: const Offset(0, 8))]),
+                  child: Column(
+                    children: [
+                      Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), shape: BoxShape.circle), child: const Icon(Icons.local_fire_department, color: Colors.white, size: 26)),
+                      const SizedBox(height: 10),
+                      const Text('5 Days', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 2),
+                      const Text('Rehab Streak', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w500)),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
-          const SizedBox(height: 30),
-          
-          // Daily Schedule Carousel
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text('Daily Schedule', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
-              TextButton(onPressed: () {}, child: const Text("View All", style: TextStyle(color: Color(0xFF059669)))),
-            ],
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            height: 180,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
+          const SizedBox(height: 24),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(20), border: Border.all(color: const Color(0xFFBFDBFE))),
+            child: Row(
               children: [
-                _buildScheduleCard(context, 'Morning', 'Shoulder Rotation', '10 Reps', Icons.wb_sunny_outlined, const Color(0xFFFF8C42)),
-                _buildScheduleCard(context, 'Afternoon', 'Leg Raise', '15 Reps', Icons.wb_cloudy_outlined, const Color(0xFF059669)),
-                _buildScheduleCard(context, 'Evening', 'Walking', '15 mins', Icons.nights_stay_outlined, const Color(0xFF6A5AE0)),
+                const Icon(Icons.water_drop_rounded, color: Color(0xFF2563EB), size: 28),
+                const SizedBox(width: 12),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Hydration Goal', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFF1E293B))), Text('$_waterGlasses of 8 glasses taken today', style: TextStyle(color: Colors.grey.shade600, fontSize: 12))])),
+                IconButton(icon: const Icon(Icons.remove_circle_outline, color: Color(0xFF2563EB)), onPressed: () { if (_waterGlasses > 0) setState(() => _waterGlasses--); }),
+                Text('$_waterGlasses', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                IconButton(icon: const Icon(Icons.add_circle, color: Color(0xFF2563EB)), onPressed: () { if (_waterGlasses < 12) setState(() => _waterGlasses++); }),
               ],
             ),
           ),
-          const SizedBox(height: 30),
-          
-          // Reminders
-          const Text('Reminders', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
-          const SizedBox(height: 16),
-          _buildReminderPill('Take Medication', '8:00 AM', Icons.medication),
-          _buildReminderPill('Exercise Time', '6:00 PM', Icons.fitness_center),
+          const SizedBox(height: 28),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Medications & Reminders', style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+              TextButton.icon(onPressed: _addMedication, icon: const Icon(Icons.add, size: 18, color: Color(0xFF059669)), label: const Text('Add', style: TextStyle(color: Color(0xFF059669), fontWeight: FontWeight.bold))),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (_isLoading) const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator()))
+          else if (_medications.isEmpty) Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)), child: const Text('No active reminders. Tap + Add to set one up.', style: TextStyle(color: Colors.grey)))
+          else Column(children: _medications.map((med) => _buildMedicationTile(med)).toList()),
+          const SizedBox(height: 28),
+          const Text('Rehab Categories', style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 170,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                _buildScheduleCard(context, 'Neck Pain', 'Chin Tucks & Tilts', '5 Exercises', Icons.accessibility_new_rounded, const Color(0xFF059669)),
+                _buildScheduleCard(context, 'Shoulder Pain', 'Stretch & Rotations', '5 Exercises', Icons.rotate_right_rounded, const Color(0xFFFF8C42)),
+                _buildScheduleCard(context, 'Wrist Pain', 'Flexion & Extension', '4 Exercises', Icons.back_hand_rounded, const Color(0xFF6A5AE0)),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildProgressMetricCard() {
+  Widget _buildMedicationTile(Medication med) {
     return Container(
-      padding: const EdgeInsets.all(20),
+      margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 5),
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
-      child: Column(
-        children: [
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              SizedBox(
-                height: 70,
-                width: 70,
-                child: CircularProgressIndicator(
-                  value: 0.68,
-                  strokeWidth: 8,
-                  backgroundColor: const Color(0xFF059669).withOpacity(0.1),
-                  color: const Color(0xFF059669),
-                ),
-              ),
-              const Text('68%', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Color(0xFF1E293B))),
-            ],
+      child: ListTile(
+        leading: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: med.isTaken ? Colors.green.withOpacity(0.12) : const Color(0xFF0F172A).withOpacity(0.08),
+            shape: BoxShape.circle,
           ),
-          const SizedBox(height: 16),
-          const Text('Recovery', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w600)),
-        ],
+          child: Icon(
+            med.isTaken ? Icons.check_circle_rounded : Icons.medication_rounded,
+            color: med.isTaken ? Colors.green : const Color(0xFF0F172A),
+            size: 22,
+          ),
+        ),
+        title: Text(
+          med.name,
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 14,
+            decoration: med.isTaken ? TextDecoration.lineThrough : null,
+            color: med.isTaken ? Colors.grey : const Color(0xFF1E293B),
+          ),
+        ),
+        subtitle: Text(
+          '${med.dosage}  •  ${med.time.format(context)}',
+          style: const TextStyle(fontSize: 12, color: Colors.grey),
+        ),
+        trailing: Checkbox(
+          value: med.isTaken,
+          activeColor: const Color(0xFF059669),
+          onChanged: (_) => _toggleMedication(med.id),
+        ),
       ),
     );
   }

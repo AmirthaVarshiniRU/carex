@@ -12,6 +12,7 @@ class ExerciseProgress {
   final DateTime date;
   final bool isCompleted;
   final Map<String, dynamic>? notes;
+  final String mood;
 
   ExerciseProgress({
     required this.id,
@@ -25,6 +26,7 @@ class ExerciseProgress {
     required this.date,
     required this.isCompleted,
     this.notes,
+    this.mood = 'Neutral',
   });
 
   Map<String, dynamic> toMap() {
@@ -39,6 +41,7 @@ class ExerciseProgress {
       'date': Timestamp.fromDate(date),
       'isCompleted': isCompleted,
       'notes': notes,
+      'mood': mood,
     };
   }
 
@@ -55,6 +58,7 @@ class ExerciseProgress {
       date: (map['date'] as Timestamp).toDate(),
       isCompleted: map['isCompleted'] ?? false,
       notes: map['notes'],
+      mood: map['mood'] ?? 'Neutral',
     );
   }
 
@@ -79,6 +83,7 @@ class ExerciseProgress {
     DateTime? date,
     bool? isCompleted,
     Map<String, dynamic>? notes,
+    String? mood,
   }) {
     return ExerciseProgress(
       id: id ?? this.id,
@@ -92,6 +97,7 @@ class ExerciseProgress {
       date: date ?? this.date,
       isCompleted: isCompleted ?? this.isCompleted,
       notes: notes ?? this.notes,
+      mood: mood ?? this.mood,
     );
   }
 } 

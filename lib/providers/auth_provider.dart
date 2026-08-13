@@ -349,4 +349,16 @@ class AuthProvider extends ChangeNotifier {
       return false;
     }
   }
+
+  Future<void> updateUserMood(String mood) async {
+    if (_user == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('userMood', mood);
+      _user = _user!.copyWith(currentMood: mood);
+      notifyListeners();
+    } catch (e) {
+      print('Error updating user mood: $e');
+    }
+  }
 }

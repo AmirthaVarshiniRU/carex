@@ -23,6 +23,8 @@ class ExerciseList extends StatelessWidget {
         return Icons.airline_seat_flat;
       case 'neck pain':
         return Icons.airline_seat_recline_normal;
+      case 'wrist pain':
+        return Icons.pan_tool_outlined;
       default:
         return Icons.fitness_center;
     }
@@ -41,6 +43,8 @@ class ExerciseList extends StatelessWidget {
         return Colors.purple;
       case 'neck pain':
         return Colors.blue;
+      case 'wrist pain':
+        return Colors.cyan;
       default:
         return const Color(0xFF059669);
     }
