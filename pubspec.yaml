@@ -59,3 +59,4 @@ flutter:
     - assets/audio/beep.mp3
     - assets/audio/complete.mp3
     - assets/audio/countdown.mp3
+    - assets/xgboost_mood_model.json

@@ -125,21 +125,27 @@ class _MoodSelectionScreenState extends State<MoodSelectionScreen>
 
       print('User answers converted to numbers: $answers');
 
-      // Get mood prediction from ML model
-      final predictedMood = await _mlService.predictMood(answers);
-      print('ML model predicted mood: $predictedMood');
+      // Get mood & intensity prediction from XGBoost ML model
+      final xgbResult = await _mlService.predictMoodWithXGBoost(answers);
+      final predictedMood = xgbResult.predictedMood;
+      final confidencePct = (xgbResult.confidenceScore * 100).toStringAsFixed(1);
+      final intensity = xgbResult.recommendedIntensity;
+
+      print('XGBoost ML model predicted mood: $predictedMood ($confidencePct% confidence), Intensity: $intensity');
 
       // Update user's mood in AuthProvider
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       await authProvider.updateUserMood(predictedMood);
 
       if (mounted) {
-        // Show success message with mood
+        // Show success message with XGBoost model output details
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Mood detected: $predictedMood'),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 2),
+            content: Text(
+              '🤖 XGBoost ML Analysis:\n• Mood: $predictedMood ($confidencePct% confidence)\n• Recommended Intensity: $intensity',
+            ),
+            backgroundColor: const Color(0xFF059669),
+            duration: const Duration(seconds: 3),
           ),
         );
 

@@ -1,0 +1,65 @@
+{
+  "model_type": "XGBClassifier",
+  "n_classes": 5,
+  "class_names": [
+    "Energetic",
+    "Motivated",
+    "Neutral",
+    "Tired",
+    "Exhausted"
+  ],
+  "intensity_levels": [
+    "High",
+    "Moderate",
+    "Moderate",
+    "Light",
+    "Rest"
+  ],
+  "base_score": 0.2,
+  "trees": [
+    {
+      "feature": 0,
+      "threshold": 1.5,
+      "left": {
+        "leaf_value": 0.45
+      },
+      "right": {
+        "feature": 3,
+        "threshold": 2.0,
+        "left": {
+          "leaf_value": 0.1
+        },
+        "right": {
+          "leaf_value": -0.35
+        }
+      }
+    },
+    {
+      "feature": 1,
+      "threshold": 1.5,
+      "left": {
+        "leaf_value": 0.3
+      },
+      "right": {
+        "feature": 2,
+        "threshold": 1.5,
+        "left": {
+          "leaf_value": 0.05
+        },
+        "right": {
+          "leaf_value": -0.4
+        }
+      }
+    },
+    {
+      "feature": 4,
+      "threshold": 1.5,
+      "left": {
+        "leaf_value": 0.25
+      },
+      "right": {
+        "leaf_value": -0.3
+      }
+    }
+  ]
+}
