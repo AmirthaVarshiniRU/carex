@@ -131,57 +131,25 @@ class _MoodSelectionScreenState extends State<MoodSelectionScreen>
       final confidencePct = (xgbResult.confidenceScore * 100).toStringAsFixed(1);
       final intensity = xgbResult.recommendedIntensity;
 
-      print('XGBoost ML model predicted mood: $predictedMood ($confidencePct% confidence), Intensity: $intensity');
 
       // Update user's mood in AuthProvider
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       await authProvider.updateUserMood(predictedMood);
 
+      setState(() {
+        _isLoading = false;
+      });
+
       if (mounted) {
-        // Show success message with XGBoost model output details
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '🤖 XGBoost ML Analysis:\n• Mood: $predictedMood ($confidencePct% confidence)\n• Recommended Intensity: $intensity',
-            ),
-            backgroundColor: const Color(0xFF059669),
-            duration: const Duration(seconds: 3),
-          ),
-        );
-
-        // Add a small delay to show the mood message
-        await Future.delayed(const Duration(seconds: 2));
-
-        // Navigate to exercise page
-        if (mounted) {
-          Navigator.push(
-            context,
-            PageRouteBuilder(
-              pageBuilder: (context, animation, secondaryAnimation) => ExercisePage(
-                userId: authProvider.user?.uid ?? '',
-                mood: predictedMood,
-                exerciseType: widget.category,
-                healthCondition: 'general',
-              ),
-              transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                const begin = Offset(1.0, 0.0);
-                const end = Offset.zero;
-                const curve = Curves.easeInOutCubic;
-                var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
-                return SlideTransition(
-                  position: animation.drive(tween),
-                  child: child,
-                );
-              },
-              transitionDuration: const Duration(milliseconds: 500),
-            ),
-          );
-        }
+        // Show rich XGBoost Model Analysis Modal Dialog
+        _showXGBoostAnalysisModal(context, xgbResult, authProvider.user?.uid ?? '');
       }
     } catch (e) {
       print('Error in mood prediction: $e');
+      setState(() {
+        _isLoading = false;
+      });
       if (mounted) {
-        // Show error message
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Error predicting mood. Using default mood.'),
@@ -189,7 +157,7 @@ class _MoodSelectionScreenState extends State<MoodSelectionScreen>
             duration: Duration(seconds: 2),
           ),
         );
-
+        
         // Add a small delay to show the error message
         await Future.delayed(const Duration(seconds: 2));
 

@@ -27,6 +27,8 @@ class ExercisePage extends StatefulWidget {
   final String exerciseType;
   final String healthCondition;
   final String? mood;
+  final int? targetReps;
+  final String? intensityMode;
 
   const ExercisePage({
     super.key,
@@ -34,6 +36,8 @@ class ExercisePage extends StatefulWidget {
     required this.exerciseType,
     required this.healthCondition,
     this.mood,
+    this.targetReps,
+    this.intensityMode,
   });
 
   @override
