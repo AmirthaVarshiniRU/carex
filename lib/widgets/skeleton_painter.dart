@@ -1,103 +1,22 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Angle helper
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Returns the angle (0–180°) at joint [b], formed by rays a→b and c→b.
-double _angleBetween(Offset a, Offset b, Offset c) {
-  final ab = a - b;
-  final cb = c - b;
-  final dot = ab.dx * cb.dx + ab.dy * cb.dy;
-  final mag = ab.distance * cb.distance;
-  if (mag == 0) return 0;
-  return math.acos((dot / mag).clamp(-1.0, 1.0)) * 180 / math.pi;
-}
-
-/// Maps a normalised ML Kit landmark to canvas pixel coordinates.
-Offset _toOffset(PoseLandmark lm, Size size) =>
-    Offset(lm.x * size.width, lm.y * size.height);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PostureResult
-// ─────────────────────────────────────────────────────────────────────────────
-
-class PostureResult {
-  final bool isGood;
-  final double spineAngle;
-  final double shoulderDiff;
-  final String feedback;
-
-  const PostureResult({
-    required this.isGood,
-    required this.spineAngle,
-    required this.shoulderDiff,
-    required this.feedback,
-  });
-}
-
-PostureResult evaluatePosture(Pose pose, Size size, String exerciseName) {
-  final lm = pose.landmarks;
-
-  final leftShoulder = lm[PoseLandmarkType.leftShoulder];
-  final rightShoulder = lm[PoseLandmarkType.rightShoulder];
-  final leftHip = lm[PoseLandmarkType.leftHip];
-  final leftKnee = lm[PoseLandmarkType.leftKnee];
-
-  double spineAngle = 180.0;
-  double shoulderDiff = 0.0;
-
-  if (leftShoulder != null && leftHip != null && leftKnee != null) {
-    spineAngle = _angleBetween(
-      _toOffset(leftShoulder, size),
-      _toOffset(leftHip, size),
-      _toOffset(leftKnee, size),
-    );
-  }
-
-  if (leftShoulder != null && rightShoulder != null) {
-    shoulderDiff =
-        (leftShoulder.y * size.height - rightShoulder.y * size.height).abs();
-  }
-
-  final name = exerciseName.toLowerCase();
-  double minSpine = 155.0;
-  if (name.contains('knee') || name.contains('leg')) minSpine = 140.0;
-  if (name.contains('spinal') || name.contains('twist')) minSpine = 120.0;
-
-  final spineOk = spineAngle >= minSpine;
-  final shoulderOk = shoulderDiff < 30.0;
-  final isGood = spineOk && shoulderOk;
-
-  final feedback = !spineOk
-      ? 'Straighten your back!'
-      : !shoulderOk
-          ? 'Level your shoulders!'
-          : 'Great posture!';
-
-  return PostureResult(
-    isGood: isGood,
-    spineAngle: spineAngle,
-    shoulderDiff: shoulderDiff,
-    feedback: feedback,
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SkeletonPainter
-// ─────────────────────────────────────────────────────────────────────────────
+import '../services/rep_counter_service.dart';
 
 class SkeletonPainter extends CustomPainter {
   final Pose? pose;
   final String exerciseName;
-  final PostureResult? postureResult;
+  final PostureFeedback? postureFeedback;
+  final Size? imageSize;
+  final InputImageRotation rotation;
+  final bool isFrontCamera;
 
   SkeletonPainter({
     required this.pose,
     required this.exerciseName,
-    this.postureResult,
+    this.postureFeedback,
+    this.imageSize,
+    this.rotation = InputImageRotation.rotation270deg,
+    this.isFrontCamera = true,
   });
 
   static const List<(PoseLandmarkType, PoseLandmarkType)> _bones = [
@@ -117,129 +36,216 @@ class SkeletonPainter extends CustomPainter {
     (PoseLandmarkType.rightKnee, PoseLandmarkType.rightAnkle),
   ];
 
+  Offset _mapPoint(PoseLandmark lm, Size canvasSize) {
+    double rawW = imageSize?.width ?? 480.0;
+    double rawH = imageSize?.height ?? 640.0;
+
+    // ML Kit processes the image after applying sensor rotation.
+    // For 90deg / 270deg (typical portrait phone cameras), width and height are swapped in ML Kit's landmark space.
+    bool isRotated = rotation == InputImageRotation.rotation90deg ||
+        rotation == InputImageRotation.rotation270deg;
+    double orientedW = isRotated ? rawH : rawW;
+    double orientedH = isRotated ? rawW : rawH;
+
+    // FittedBox(fit: BoxFit.cover) coordinate transform
+    final double imgAspect = orientedW / orientedH;
+    final double canvasAspect = canvasSize.width / canvasSize.height;
+
+    double scale;
+    double offsetX = 0.0;
+    double offsetY = 0.0;
+
+    if (canvasAspect > imgAspect) {
+      scale = canvasSize.width / orientedW;
+      offsetY = (canvasSize.height - (orientedH * scale)) / 2.0;
+    } else {
+      scale = canvasSize.height / orientedH;
+      offsetX = (canvasSize.width - (orientedW * scale)) / 2.0;
+    }
+
+    double landmarkX = lm.x;
+    if (isFrontCamera) {
+      // Mirror horizontally for front-facing selfie camera
+      landmarkX = orientedW - landmarkX;
+    }
+
+    double finalX = offsetX + (landmarkX * scale);
+    double finalY = offsetY + (lm.y * scale);
+
+    return Offset(finalX, finalY);
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     if (pose == null) {
-      _drawGhostSkeleton(canvas, size);
+      _drawGhostGuide(canvas, size);
       return;
     }
 
-    final isGood = postureResult?.isGood ?? true;
-    final boneColor = isGood ? Colors.greenAccent : Colors.redAccent;
-    final jointColor = isGood ? Colors.green : Colors.red;
+    final isGood = postureFeedback?.isGood ?? false;
+    final primaryColor = isGood ? const Color(0xFF00E676) : const Color(0xFFFF5252);
+    final accentColor = isGood ? const Color(0xFF00E5FF) : const Color(0xFFFF9100);
 
+    // High contrast bone paint
     final bonePaint = Paint()
-      ..color = boneColor.withOpacity(0.85)
-      ..strokeWidth = 4
+      ..color = primaryColor.withValues(alpha: 0.9)
+      ..strokeWidth = 4.0
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
 
-    final jointPaint = Paint()
-      ..color = jointColor
-      ..style = PaintingStyle.fill;
+    final armBonePaint = Paint()
+      ..color = accentColor.withValues(alpha: 0.9)
+      ..strokeWidth = 4.0
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
 
     final lm = pose!.landmarks;
 
-    // Bones
+    // 1. Draw Skeleton Bones
     for (final (typeA, typeB) in _bones) {
       final a = lm[typeA];
       final b = lm[typeB];
-      if (a != null && b != null && a.likelihood > 0.5 && b.likelihood > 0.5) {
-        canvas.drawLine(_toOffset(a, size), _toOffset(b, size), bonePaint);
+      if (a != null && b != null && a.likelihood > 0.15 && b.likelihood > 0.15) {
+        final ptA = _mapPoint(a, size);
+        final ptB = _mapPoint(b, size);
+        final isArm = typeA == PoseLandmarkType.leftShoulder && typeB == PoseLandmarkType.leftElbow ||
+            typeA == PoseLandmarkType.leftElbow && typeB == PoseLandmarkType.leftWrist ||
+            typeA == PoseLandmarkType.rightShoulder && typeB == PoseLandmarkType.rightElbow ||
+            typeA == PoseLandmarkType.rightElbow && typeB == PoseLandmarkType.rightWrist;
+
+        canvas.drawLine(ptA, ptB, isArm ? armBonePaint : bonePaint);
       }
     }
 
-    // Joints
-    for (final landmark in lm.values) {
-      if (landmark.likelihood > 0.5) {
-        final pos = _toOffset(landmark, size);
-        canvas.drawCircle(pos, 6, jointPaint);
-        canvas.drawCircle(pos, 3, Paint()..color = Colors.white);
+    // 2. Draw Key Joint Circles (Shoulders, Elbows, Wrists, Nose)
+    for (final entry in lm.entries) {
+      final landmark = entry.value;
+      if (landmark.likelihood > 0.15) {
+        final pos = _mapPoint(landmark, size);
+
+        // Glow ring
+        canvas.drawCircle(pos, 8, Paint()..color = primaryColor.withValues(alpha: 0.35));
+        // Outer dot
+        canvas.drawCircle(pos, 5, Paint()..color = Colors.white);
+        // Joint core
+        canvas.drawCircle(pos, 3, Paint()..color = accentColor);
       }
     }
 
-    // Warning glow on bad-posture joints
-    if (!isGood) {
-      final warnPaint = Paint()
-        ..color = Colors.redAccent.withOpacity(0.25)
-        ..style = PaintingStyle.fill;
-      final lhip = lm[PoseLandmarkType.leftHip];
-      final lshoulder = lm[PoseLandmarkType.leftShoulder];
-      if (lhip != null) canvas.drawCircle(_toOffset(lhip, size), 22, warnPaint);
-      if (lshoulder != null) {
-        canvas.drawCircle(_toOffset(lshoulder, size), 22, warnPaint);
+    // 3. Prominently Highlight Tracked Shoulders
+    final lShoulder = lm[PoseLandmarkType.leftShoulder];
+    final rShoulder = lm[PoseLandmarkType.rightShoulder];
+    if (lShoulder != null && rShoulder != null && lShoulder.likelihood > 0.15 && rShoulder.likelihood > 0.15) {
+      final pL = _mapPoint(lShoulder, size);
+      final pR = _mapPoint(rShoulder, size);
+
+      // Shoulder alignment line
+      final linePaint = Paint()
+        ..color = isGood ? Colors.tealAccent.withValues(alpha: 0.9) : Colors.redAccent.withValues(alpha: 0.9)
+        ..strokeWidth = 2.5
+        ..style = PaintingStyle.stroke;
+      canvas.drawLine(pL, pR, linePaint);
+
+      // Large Target Rings on Tracked Shoulders
+      final targetRing = Paint()
+        ..color = isGood ? const Color(0xFF00E676) : const Color(0xFFFF5252)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5;
+
+      canvas.drawCircle(pL, 14, targetRing);
+      canvas.drawCircle(pR, 14, targetRing);
+      canvas.drawCircle(pL, 6, Paint()..color = Colors.white);
+      canvas.drawCircle(pR, 6, Paint()..color = Colors.white);
+
+      // Spine / Neck reference line
+      final nose = lm[PoseLandmarkType.nose];
+      if (nose != null && nose.likelihood > 0.15) {
+        final pNose = _mapPoint(nose, size);
+        final pMid = Offset((pL.dx + pR.dx) / 2, (pL.dy + pR.dy) / 2);
+        final spinePaint = Paint()
+          ..color = Colors.cyanAccent.withValues(alpha: 0.65)
+          ..strokeWidth = 2.0
+          ..style = PaintingStyle.stroke;
+        canvas.drawLine(pNose, pMid, spinePaint);
       }
     }
 
-    // Spine angle label
-    if (postureResult != null) {
-      final lhip = lm[PoseLandmarkType.leftHip];
-      if (lhip != null) {
-        _drawLabel(
-          canvas,
-          '${postureResult!.spineAngle.toStringAsFixed(0)}°',
-          _toOffset(lhip, size) + const Offset(10, -10),
-          isGood ? Colors.greenAccent : Colors.redAccent,
-        );
-      }
+    // 4. Live Telemetry Badge over Active Joint
+    final activeJoint = lShoulder ?? rShoulder;
+    if (activeJoint != null && activeJoint.likelihood > 0.15) {
+      final pos = _mapPoint(activeJoint, size) + const Offset(16, -14);
+      final phase = postureFeedback?.phaseName ?? 'READY';
+      _drawTelemetryBadge(canvas, phase, pos, primaryColor);
     }
   }
 
-  void _drawLabel(Canvas canvas, String text, Offset pos, Color color) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: TextStyle(
-          color: color,
-          fontSize: 14,
-          fontWeight: FontWeight.bold,
-          shadows: const [Shadow(blurRadius: 4, color: Colors.black)],
-        ),
+  void _drawTelemetryBadge(Canvas canvas, String text, Offset pos, Color color) {
+    final textSpan = TextSpan(
+      text: text,
+      style: TextStyle(
+        color: Colors.white,
+        fontSize: 11,
+        fontWeight: FontWeight.bold,
+        shadows: [
+          Shadow(color: Colors.black.withValues(alpha: 0.9), blurRadius: 4),
+        ],
       ),
+    );
+    final textPainter = TextPainter(
+      text: textSpan,
       textDirection: TextDirection.ltr,
     )..layout();
-    tp.paint(canvas, pos);
+
+    final bgRect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(pos.dx - 4, pos.dy - 2, textPainter.width + 8, textPainter.height + 4),
+      const Radius.circular(6),
+    );
+
+    canvas.drawRRect(bgRect, Paint()..color = color.withValues(alpha: 0.85));
+    textPainter.paint(canvas, pos);
   }
 
-  /// Ghost skeleton shown when no person is detected.
-  void _drawGhostSkeleton(Canvas canvas, Size size) {
+  /// Subtle guide overlay shown when waiting for camera user alignment
+  void _drawGhostGuide(Canvas canvas, Size size) {
     final cx = size.width / 2;
     final cy = size.height / 2;
 
     final paint = Paint()
-      ..color = Colors.white.withOpacity(0.15)
-      ..strokeWidth = 3
+      ..color = Colors.white.withValues(alpha: 0.18)
+      ..strokeWidth = 2.5
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
 
-    final head = Offset(cx, cy - 90);
-    final neck = Offset(cx, cy - 60);
-    final lshoulder = Offset(cx - 45, cy - 45);
-    final rshoulder = Offset(cx + 45, cy - 45);
-    final lhip = Offset(cx - 25, cy + 20);
-    final rhip = Offset(cx + 25, cy + 20);
-    final lknee = Offset(cx - 25, cy + 70);
-    final rknee = Offset(cx + 25, cy + 70);
-    final lankle = Offset(cx - 25, cy + 110);
-    final rankle = Offset(cx + 25, cy + 110);
+    final head = Offset(cx, cy - 60);
+    final neck = Offset(cx, cy - 35);
+    final lshoulder = Offset(cx - 40, cy - 25);
+    final rshoulder = Offset(cx + 40, cy - 25);
+    final lElbow = Offset(cx - 55, cy + 15);
+    final rElbow = Offset(cx + 55, cy + 15);
 
     canvas
       ..drawCircle(head, 18, paint)
-      ..drawLine(neck, Offset(cx, cy + 20), paint)
-      ..drawLine(lshoulder, rshoulder, paint)
-      ..drawLine(lshoulder, Offset(cx - 65, cy), paint)
-      ..drawLine(rshoulder, Offset(cx + 65, cy), paint)
-      ..drawLine(lhip, rhip, paint)
-      ..drawLine(lhip, lknee, paint)
-      ..drawLine(lknee, lankle, paint)
-      ..drawLine(rhip, rknee, paint)
-      ..drawLine(rknee, rankle, paint);
+      ..drawLine(neck, Offset(cx, cy + 30), paint)
+      ..drawLine(neck, lshoulder, paint)
+      ..drawLine(neck, rshoulder, paint)
+      ..drawLine(lshoulder, lElbow, paint)
+      ..drawLine(rshoulder, rElbow, paint);
 
-    _drawLabel(canvas, 'Stand in frame', Offset(cx - 55, cy - 130), Colors.white54);
+    final textSpan = TextSpan(
+      text: 'Stand or sit in camera view',
+      style: TextStyle(
+        color: Colors.white.withValues(alpha: 0.5),
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+    final textPainter = TextPainter(
+      text: textSpan,
+      textDirection: TextDirection.ltr,
+    )..layout();
+    textPainter.paint(canvas, Offset(cx - (textPainter.width / 2), cy + 50));
   }
 
   @override
-  bool shouldRepaint(covariant SkeletonPainter old) =>
-      old.pose != pose || old.postureResult != postureResult;
+  bool shouldRepaint(covariant SkeletonPainter oldDelegate) => true;
 }
-

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:circular_countdown_timer/circular_countdown_timer.dart';
@@ -29,6 +30,8 @@ class ExercisePage extends StatefulWidget {
   final String? mood;
   final int? targetReps;
   final String? intensityMode;
+  final Exercise? initialExercise;
+  final int? initialExerciseIndex;
 
   const ExercisePage({
     super.key,
@@ -38,6 +41,8 @@ class ExercisePage extends StatefulWidget {
     this.mood,
     this.targetReps,
     this.intensityMode,
+    this.initialExercise,
+    this.initialExerciseIndex,
   });
 
   @override
@@ -97,7 +102,7 @@ class _ExercisePageState extends State<ExercisePage> {
   int _currentHeartRate = 0;
   int _currentSpO2 = 0;
   StreamSubscription<DatabaseEvent>? _healthSubscription;
-  bool _isAlertDialogVisible = false;
+  final bool _isAlertDialogVisible = false;
   BuildContext? _dialogContext;
   bool _isHealthAlertActive = false;
   bool _isHealthDataAbnormal = false;
@@ -122,6 +127,9 @@ class _ExercisePageState extends State<ExercisePage> {
           camera,
           ResolutionPreset.medium,
           enableAudio: false,
+          imageFormatGroup: Platform.isAndroid
+    ? ImageFormatGroup.nv21
+    : ImageFormatGroup.bgra8888,
         );
         try {
           await _cameraController!.initialize();
@@ -133,29 +141,39 @@ class _ExercisePageState extends State<ExercisePage> {
             // Start live image stream for ML Kit landmark processing on mobile devices
             if (!kIsWeb) {
               _cameraController!.startImageStream((CameraImage image) async {
+                if (!mounted) return;
+
+                debugPrint("FRAME RECEIVED: ${image.width}x${image.height}, fmt=${image.format.raw}");
+
                 final pose = await _poseDetectorService.detect(
                   cameraImage: image,
                   camera: camera,
                 );
+
                 if (pose != null && mounted) {
+                  debugPrint("POSE CALLBACK RECEIVED");
                   final repCompleted = _repCounter.processPose(pose, _currentExercise?.name ?? '');
-                  if (repCompleted && !_isMuted) {
-                    _flutterTts.speak("Good rep!");
+                  if (repCompleted && _isExerciseInProgress && !_isBreakTime) {
+                    final target = _currentExercise?.reps ?? 8;
+                    if (!_isMuted) {
+                      _flutterTts.speak("Rep ${_repCounter.repCount}");
+                    }
+                    if (_repCounter.repCount >= target) {
+                      _onExerciseComplete();
+                    }
                   }
 
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) {
-                      setState(() {
-                        _currentPose = pose;
-                      });
-                    }
-                  });
+                  if (mounted) {
+                    setState(() {
+                      _currentPose = pose;
+                    });
+                  }
                 }
               });
             }
           }
         } catch (e) {
-          print("Camera initialization error: $e");
+          debugPrint("Camera initialization error: $e");
         }
       }
     }
@@ -657,12 +675,23 @@ class _ExercisePageState extends State<ExercisePage> {
   void _loadExercises() {
     setState(() {
       _exercises = _getExercises();
-      _currentExerciseIndex = 0;
+      int startIdx = 0;
+      if (widget.initialExerciseIndex != null &&
+          widget.initialExerciseIndex! >= 0 &&
+          widget.initialExerciseIndex! < _exercises.length) {
+        startIdx = widget.initialExerciseIndex!;
+      } else if (widget.initialExercise != null) {
+        final found = _exercises.indexWhere((e) =>
+            e.id == widget.initialExercise!.id ||
+            e.name.toLowerCase() == widget.initialExercise!.name.toLowerCase());
+        if (found >= 0) startIdx = found;
+      }
+      _currentExerciseIndex = startIdx;
       _isCompleted = false;
       _isBreakTime = false;
       _totalExerciseTime = 0;
       _totalBreakTime = 0;
-      _currentExercise = _exercises.isNotEmpty ? _exercises[0] : null;
+      _currentExercise = _exercises.isNotEmpty ? _exercises[startIdx] : widget.initialExercise;
     });
   }
 
@@ -715,7 +744,7 @@ class _ExercisePageState extends State<ExercisePage> {
           if (mounted && _isBreakTime && !_isShowingVideo) {
             _audioPlayer.play(AssetSource('audio/beep.mp3'));
             print(
-                "Playing break beep at ${breakSecondsRemaining - i} seconds (${i} seconds remaining)");
+                "Playing break beep at ${breakSecondsRemaining - i} seconds ($i seconds remaining)");
           }
         });
         _pendingAudioTasks.add(beepTask);
@@ -758,7 +787,6 @@ class _ExercisePageState extends State<ExercisePage> {
 
   @override
   void dispose() {
-    _cameraController?.dispose();
     _totalTimer?.cancel();
     _breakTimer?.cancel();
     _countdownSoundTimer?.cancel();
@@ -766,7 +794,16 @@ class _ExercisePageState extends State<ExercisePage> {
     _audioPlayer.dispose();
     _flutterTts.stop();
     _cancelPendingAudio();
-    _healthSubscription?.cancel(); // <- ADD THIS
+    _healthSubscription?.cancel();
+
+    if (_cameraController != null) {
+      if (_cameraController!.value.isStreamingImages) {
+        _cameraController!.stopImageStream().catchError((_) {});
+      }
+      _cameraController!.dispose();
+      _cameraController = null;
+    }
+    _poseDetectorService.dispose();
     super.dispose();
   }
 
@@ -860,6 +897,7 @@ class _ExercisePageState extends State<ExercisePage> {
                   _isStarted = true;
                   _isExerciseInProgress = true;
                   _isShowingVideo = false; // Reset video flag
+                  _repCounter.reset();
                   // Reset exercise time counters when starting after video
                   _totalExerciseTime = 0;
                   _totalBreakTime = 0;
@@ -883,13 +921,6 @@ class _ExercisePageState extends State<ExercisePage> {
                     setState(() {
                       if (!_isBreakTime) {
                         _totalExerciseTime++;
-
-                        // TTS audio triggers for posture correction
-                        if (_totalExerciseTime == 10 && !_isMuted) {
-                          _flutterTts.speak("Please adjust your posture. Align your spine and look forward.");
-                        } else if (_totalExerciseTime == 18 && !_isMuted) {
-                          _flutterTts.speak("Posture corrected. Well done!");
-                        }
 
                         // Recalculate progress every 5 seconds
                         if (_totalExerciseTime % 5 == 0) {
@@ -975,7 +1006,7 @@ class _ExercisePageState extends State<ExercisePage> {
               !_isShowingVideo) {
             _audioPlayer.play(AssetSource('audio/beep.mp3'));
             print(
-                "Playing beep at ${exerciseDurationSeconds - i} seconds (${i} seconds remaining)");
+                "Playing beep at ${exerciseDurationSeconds - i} seconds ($i seconds remaining)");
           }
         });
         _pendingAudioTasks.add(beepTask);
@@ -983,15 +1014,19 @@ class _ExercisePageState extends State<ExercisePage> {
     }
   }
 
-  void _startSession() {
+  void _startSession([int? index]) {
+    final targetIndex = index ?? _currentExerciseIndex;
+    final validIndex = (targetIndex >= 0 && targetIndex < _exercises.length) ? targetIndex : 0;
+
     setState(() {
-      _currentExerciseIndex = 0;
-      _currentExercise = _exercises[0];
+      _currentExerciseIndex = validIndex;
+      _currentExercise = _exercises.isNotEmpty ? _exercises[validIndex] : null;
       _isCompleted = false;
       _isBreakTime = false;
       _totalExerciseTime = 0;
       _totalBreakTime = 0;
       _isExerciseInProgress = false;
+      _repCounter.reset();
 
       // Cancel any existing timers
       _totalTimer?.cancel();
@@ -1002,7 +1037,7 @@ class _ExercisePageState extends State<ExercisePage> {
       _countdownSoundTimer = null;
     });
 
-    // Show video for the first exercise
+    // Show video preview for the selected exercise
     _showExerciseVideo();
   }
 
@@ -1127,21 +1162,25 @@ class _ExercisePageState extends State<ExercisePage> {
       _isCompleted = true;
     });
 
+    final realReps = _repCounter.repCount;
+    final realScore = _repCounter.lastFeedback.formScore;
+
     // Save progress
     final progress = ExerciseProgress(
       id: _uuid.v4(),
       userId: widget.userId,
       exerciseId: _currentExercise!.id,
       exerciseName: _currentExercise!.name,
-      completedReps: _currentExercise!.reps,
+      completedReps: realReps,
       targetReps: _currentExercise!.reps,
-      completedDuration: Duration(seconds: _currentExercise!.duration),
+      completedDuration: Duration(seconds: _totalExerciseTime > 0 ? _totalExerciseTime : _currentExercise!.duration),
       targetDuration: Duration(seconds: _currentExercise!.duration),
       date: DateTime.now(),
       isCompleted: true,
       notes: {
         'exerciseType': widget.exerciseType,
         'healthCondition': widget.healthCondition,
+        'qualityScore': realScore,
       },
       mood: widget.mood ?? 'Neutral',
     );
@@ -1160,6 +1199,9 @@ class _ExercisePageState extends State<ExercisePage> {
                   (_totalExerciseTime / 60 * 5 * 70 / 60).round(),
               totalMinutes: (_totalExerciseTime / 60).round(),
               currentExercise: _currentExercise!,
+              completedReps: realReps,
+              targetReps: _currentExercise!.reps,
+              qualityScore: realScore,
             ),
           ),
         );
@@ -1187,6 +1229,7 @@ class _ExercisePageState extends State<ExercisePage> {
         _isExerciseInProgress = false;
         _currentExercise =
             _exercises[_currentExerciseIndex]; // Set current exercise
+        _repCounter.reset();
 
         // When moving to next exercise, update progress
         _recalculateProgress();
@@ -1200,6 +1243,9 @@ class _ExercisePageState extends State<ExercisePage> {
   }
 
   void _onSessionComplete() {
+    final realReps = _repCounter.repCount;
+    final realScore = _repCounter.lastFeedback.formScore;
+
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (context) => ExerciseCompletionScreen(
@@ -1207,8 +1253,10 @@ class _ExercisePageState extends State<ExercisePage> {
           completedExercises: _currentExerciseIndex + 1,
           totalMinutes: _calculateTotalMinutes(),
           category: _currentExercise!.category,
-          totalCaloriesBurned: _calculateTotalMinutes() *
-              5, // Rough estimate of calories burned per minute
+          totalCaloriesBurned: _calculateTotalMinutes() * 5,
+          completedReps: realReps,
+          targetReps: _currentExercise!.reps,
+          qualityScore: realScore,
         ),
       ),
     );
@@ -1241,6 +1289,9 @@ class _ExercisePageState extends State<ExercisePage> {
       _audioPlayer.play(AssetSource('audio/complete.mp3'));
     }
 
+    final realReps = _repCounter.repCount;
+    final realScore = _repCounter.lastFeedback.formScore;
+
     setState(() {
       _isCompleted = true;
       _isExerciseInProgress = false;
@@ -1261,6 +1312,9 @@ class _ExercisePageState extends State<ExercisePage> {
           totalCaloriesBurned: totalCaloriesBurned,
           totalMinutes: totalMinutes,
           currentExercise: _exercises[_exercises.length - 1],
+          completedReps: realReps,
+          targetReps: _exercises[_exercises.length - 1].reps,
+          qualityScore: realScore,
         ),
       ),
     );
@@ -1563,11 +1617,7 @@ class _ExercisePageState extends State<ExercisePage> {
                   margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                   child: InkWell(
                     onTap: () {
-                      setState(() {
-                        _currentExercise = exercise;
-                        _currentExerciseIndex = index;
-                      });
-                      _startSession();
+                      _startSession(index);
                     },
                     borderRadius: BorderRadius.circular(12),
                     child: Padding(
@@ -1580,7 +1630,7 @@ class _ExercisePageState extends State<ExercisePage> {
                               Container(
                                 padding: const EdgeInsets.all(8),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF059669).withOpacity(0.1),
+                                  color: const Color(0xFF059669).withValues(alpha: 0.1),
                                   shape: BoxShape.circle,
                                 ),
                                 child: Icon(
@@ -1618,11 +1668,7 @@ class _ExercisePageState extends State<ExercisePage> {
                                 icon: const Icon(Icons.play_circle_outline),
                                 color: const Color(0xFF059669),
                                 onPressed: () {
-                                  setState(() {
-                                    _currentExercise = exercise;
-                                    _currentExerciseIndex = index;
-                                  });
-                                  _startSession();
+                                  _startSession(index);
                                 },
                               ),
                             ],
@@ -1662,7 +1708,7 @@ class _ExercisePageState extends State<ExercisePage> {
                                   vertical: 4,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: intensityColor.withOpacity(0.1),
+                                  color: intensityColor.withValues(alpha: 0.1),
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: Text(
@@ -1831,183 +1877,225 @@ class _ExercisePageState extends State<ExercisePage> {
     print(
         'Total Progress: ${_formatTime(completedDuration)} / ${_formatTime(totalDuration)}');
 
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Text(
-          _isBreakTime ? 'Break Time!' : exercise.name,
-          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 16),
-        if (!_isBreakTime)
-          Text(
-            exercise.description,
-            style: Theme.of(context).textTheme.bodyLarge,
-            textAlign: TextAlign.center,
-          ),
-        const SizedBox(height: 20),
-
-        // Exercise number indicator
-        Text(
-          'Exercise ${_currentExerciseIndex + 1} of ${_exercises.length}',
-          style: Theme.of(context).textTheme.bodyMedium,
-        ),
-        const SizedBox(height: 10),
-
-        // Only show progress during exercises, not during breaks
-        if (!_isBreakTime) ...[
-          // Total time progress
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              IconButton(
-                icon: Icon(_isMuted ? Icons.volume_off : Icons.volume_up,
-                    color: Colors.black),
-                onPressed: toggleMute,
-              ),
-              Text(
-                'Total Progress: ${_formatTime(completedDuration)} / ${_formatTime(totalDuration)}',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ],
-          ),
-          const SizedBox(height: 5),
-          LinearProgressIndicator(
-            value: progressValue,
-            backgroundColor: Colors.grey[300],
-            valueColor:
-                AlwaysStoppedAnimation<Color>(Theme.of(context).primaryColor),
-          ),
-        ],
-
-        const SizedBox(height: 20),
-        if (!_isBreakTime) ...[
-          _buildCameraOverlay(),
-          const SizedBox(height: 20),
-        ],
-        Center(
-          child: CircularCountDownTimer(
-            duration: _getAdjustedDuration(currentDuration),
-            controller: _controller,
-            width: MediaQuery.of(context).size.width * 0.3,
-            height: MediaQuery.of(context).size.width * 0.3,
-            ringColor: Colors.grey[300]!,
-            fillColor:
-                _isBreakTime ? Colors.orange : Theme.of(context).primaryColor,
-            backgroundColor: Colors.white,
-            strokeWidth: 20.0,
-            isReverse: true,
-            autoStart: true,
-            timeFormatterFunction: (defaultFormattedTime, duration) {
-              final minutes = duration.inSeconds ~/ 60;
-              final seconds = duration.inSeconds % 60;
-              return '$minutes:${seconds.toString().padLeft(2, '0')}';
-            },
-            onComplete: () =>
-                _isBreakTime ? _onBreakComplete() : _onExerciseComplete(),
-            onChange: (timeStamp) {
-              try {
-                int elapsedSeconds = 0;
-                if (timeStamp.contains(':')) {
-                  final parts = timeStamp.split(':');
-                  if (parts.length == 2) {
-                    final mins = int.tryParse(parts[0]) ?? 0;
-                    final secs = int.tryParse(parts[1]) ?? 0;
-                    elapsedSeconds = (mins * 60) + secs;
-                  }
-                } else {
-                  elapsedSeconds = int.tryParse(timeStamp) ?? 0;
-                }
-
-                final seconds = _getAdjustedDuration(currentDuration) - elapsedSeconds;
-
-                if (!_isBreakTime && mounted) {
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) setState(() {});
-                  });
-                }
-
-                if (!_isBreakTime && seconds > 0) {
-                  _playCountdownSound(seconds);
-                }
-              } catch (e) {
-                print('Error parsing timeStamp: $e');
-              }
-            },
-            textStyle: const TextStyle(
-              fontSize: 40.0,
-              fontWeight: FontWeight.bold,
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── Exercise Header Card ──────────────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF059669).withValues(alpha: 0.12),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.accessibility_new_rounded, color: Color(0xFF059669), size: 24),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _isBreakTime ? 'Break Time!' : exercise.name,
+                        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17, color: Color(0xFF1E293B)),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Exercise ${_currentExerciseIndex + 1} of ${_exercises.length}  •  ${widget.exerciseType}',
+                        style: TextStyle(color: Colors.grey.shade600, fontSize: 12, fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(_isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded, color: const Color(0xFF059669)),
+                  onPressed: toggleMute,
+                  tooltip: _isMuted ? 'Unmute' : 'Mute',
+                ),
+              ],
             ),
           ),
-        ),
-        const SizedBox(height: 40),
-        if (_isBreakTime) ...[
-          if (_currentExerciseIndex < _exercises.length - 1)
-            Text(
-              'Next Exercise: ${_exercises[_currentExerciseIndex + 1].name}',
-              style: Theme.of(context).textTheme.titleLarge,
-              textAlign: TextAlign.center,
+          const SizedBox(height: 12),
+
+          // ── Instructions Strip ────────────────────────────────────────────
+          if (!_isBreakTime)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0FDF4),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFFBBF7D0)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded, color: Color(0xFF059669), size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      exercise.instructions,
+                      style: const TextStyle(color: Color(0xFF166534), fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          const SizedBox(height: 16),
-          ElevatedButton(
-            onPressed: _skipBreak,
-            child: const Text('Skip Break'),
+          const SizedBox(height: 14),
+
+          // ── Real-Time Camera & Pose Viewfinder ────────────────────────────
+          if (!_isBreakTime) ...[
+            _buildCameraOverlay(),
+            const SizedBox(height: 14),
+          ],
+
+          // ── Exercise Metrics & Controls ───────────────────────────────────
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  blurRadius: 14,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                // Rep Progress Bar / Header
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.repeat_rounded, color: Color(0xFF059669), size: 22),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Target: ${exercise.reps} Reps',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF1E293B)),
+                        ),
+                      ],
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF059669).withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '${_repCounter.repCount} / ${exercise.reps} Completed',
+                        style: const TextStyle(color: Color(0xFF059669), fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: LinearProgressIndicator(
+                    value: exercise.reps > 0 ? (_repCounter.repCount / exercise.reps).clamp(0.0, 1.0) : 0.0,
+                    minHeight: 10,
+                    backgroundColor: Colors.grey.shade200,
+                    color: const Color(0xFF059669),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Action Buttons
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: _isExerciseInProgress ? _pauseExercise : _resumeExercise,
+                        icon: Icon(_isExerciseInProgress ? Icons.pause_rounded : Icons.play_arrow_rounded),
+                        label: Text(_isExerciseInProgress ? 'Pause' : 'Resume'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF0F172A),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: _onExerciseComplete,
+                        icon: const Icon(Icons.check_circle_rounded),
+                        label: const Text('Finish / Next'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF059669),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ] else ...[
-          Text(
-            'Instructions:',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            exercise.instructions,
-            textAlign: TextAlign.center,
-          ),
+          const SizedBox(height: 30),
         ],
-      ],
+      ),
     );
   }
 
   Widget _buildCameraOverlay() {
-    final isIncorrect = !_isBreakTime && _totalExerciseTime >= 10 && _totalExerciseTime < 18;
-    final statusColor = isIncorrect ? const Color(0xFFFF5252) : const Color(0xFF00E676);
-    final statusText = isIncorrect ? 'POSTURE: DEVIATION DETECTED' : 'POSTURE: OPTIMAL ALIGNMENT';
-    final guidanceText = isIncorrect ? 'Align your back and spine!' : 'Perfect stance! Hold form.';
-    final currentAngle = isIncorrect ? '68°' : '88°';
-    final scoreText = isIncorrect ? '72% Quality' : '98% Quality';
+    final feedback = _repCounter.lastFeedback;
+    final isGood = feedback.isGood;
+    final statusColor = isGood ? const Color(0xFF00E676) : const Color(0xFFFF5252);
+    final guidanceText = feedback.guidanceText;
+    final phaseText = feedback.phaseName;
+    final scoreText = 'FORM ${feedback.formScore}%';
+    final isTimed = _currentExercise != null && _currentExercise!.name.toLowerCase().contains('stretch');
 
     return Container(
-      height: 270,
+      height: 310,
       width: double.infinity,
       decoration: BoxDecoration(
         color: const Color(0xFF0F172A),
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: statusColor.withOpacity(0.2),
+            color: statusColor.withValues(alpha: 0.22),
             blurRadius: 16,
             spreadRadius: -2,
           ),
         ],
-        border: Border.all(color: statusColor, width: 2.5),
+        border: Border.all(color: statusColor.withValues(alpha: 0.85), width: 2.5),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(21),
         child: Stack(
           children: [
             // Camera Feed or Placeholder
-            if (_isCameraInitialized && _cameraController != null)
+            if (_isCameraInitialized && _cameraController != null && _cameraController!.value.isInitialized)
               SizedBox(
                 width: double.infinity,
                 height: double.infinity,
                 child: FittedBox(
                   fit: BoxFit.cover,
                   child: SizedBox(
-                    width: _cameraController!.value.previewSize?.height ?? 1,
-                    height: _cameraController!.value.previewSize?.width ?? 1,
+                    width: _cameraController!.value.previewSize?.height ?? 480,
+                    height: _cameraController!.value.previewSize?.width ?? 640,
                     child: CameraPreview(_cameraController!),
                   ),
                 ),
@@ -2017,9 +2105,9 @@ class _ExercisePageState extends State<ExercisePage> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: const [
-                    Icon(Icons.center_focus_strong_rounded, color: Colors.white24, size: 70),
+                    Icon(Icons.center_focus_strong_rounded, color: Colors.white24, size: 60),
                     SizedBox(height: 8),
-                    Text("AI Viewfinder Initializing...", style: TextStyle(color: Colors.white38, fontSize: 12)),
+                    Text("Rehab Camera Active", style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.w600)),
                   ],
                 ),
               ),
@@ -2030,113 +2118,182 @@ class _ExercisePageState extends State<ExercisePage> {
                 painter: SkeletonPainter(
                   pose: _currentPose,
                   exerciseName: _currentExercise?.name ?? '',
+                  postureFeedback: feedback,
+                  imageSize: _poseDetectorService.lastImageSize,
+                  rotation: _poseDetectorService.lastRotation,
+                  isFrontCamera: true,
                 ),
               ),
             ),
 
-            // HUD Viewfinder Corners
+            // Top Left: Posture & Pose Detection Badge
             Positioned(
-              top: 12,
-              left: 12,
-              child: Icon(Icons.crop_free_rounded, color: statusColor.withOpacity(0.8), size: 28),
-            ),
-            Positioned(
-              top: 12,
-              right: 12,
-              child: Icon(Icons.crop_free_rounded, color: statusColor.withOpacity(0.8), size: 28),
-            ),
-
-            // Top Status Badge
-            Positioned(
-              top: 14,
-              left: 45,
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: statusColor.withOpacity(0.9),
-                      borderRadius: BorderRadius.circular(8),
-                      boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 6)],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.sensors_rounded, color: Colors.white, size: 14),
-                        const SizedBox(width: 5),
-                        Text(
-                          statusText,
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 0.3),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF2563EB).withOpacity(0.9),
-                      borderRadius: BorderRadius.circular(8),
-                      boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 6)],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.repeat_rounded, color: Colors.white, size: 14),
-                        const SizedBox(width: 4),
-                        Text(
-                          'AI Reps: ${_repCounter.repCount} / ${_currentExercise?.reps ?? 10}',
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            // Bottom Left Angle Metric
-            Positioned(
-              bottom: 12,
-              left: 12,
+              top: 10,
+              left: 10,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF0F172A).withOpacity(0.85),
+                  color: const Color(0xFF0F172A).withValues(alpha: 0.90),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.white12),
+                  border: Border.all(color: statusColor.withValues(alpha: 0.7), width: 1.5),
+                  boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 6)],
                 ),
                 child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.architecture_rounded, color: Colors.white70, size: 14),
+                    Icon(
+                      feedback.isPoseDetected ? Icons.check_circle_rounded : Icons.search_rounded,
+                      color: feedback.isPoseDetected ? const Color(0xFF00E676) : const Color(0xFFFF9100),
+                      size: 15,
+                    ),
                     const SizedBox(width: 5),
-                    Text('Angle: $currentAngle (Target: 90°)', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                    Text(
+                      feedback.isPoseDetected ? 'POSE: DETECTED' : 'POSE: SCANNING...',
+                      style: TextStyle(
+                        color: feedback.isPoseDetected ? const Color(0xFF00E676) : const Color(0xFFFF9100),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 10.5,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
                   ],
                 ),
               ),
             ),
 
-            // Bottom Right Guidance & Quality Score
+            // Top Center: Movement Phase Badge
             Positioned(
-              bottom: 12,
-              right: 12,
+              top: 10,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B).withValues(alpha: 0.92),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white24, width: 1.0),
+                    boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 4)],
+                  ),
+                  child: Text(
+                    'PHASE: $phaseText',
+                    style: const TextStyle(
+                      color: Color(0xFF38BDF8),
+                      fontWeight: FontWeight.w800,
+                      fontSize: 10.5,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            // Top Right: AI Rep Counter / Timer Badge
+            Positioned(
+              top: 10,
+              right: 10,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF0F172A).withOpacity(0.85),
+                  color: const Color(0xFF059669).withValues(alpha: 0.92),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: statusColor.withOpacity(0.5)),
+                  boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 6)],
                 ),
                 child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
+                    Icon(isTimed ? Icons.timer_rounded : Icons.fitness_center_rounded, color: Colors.white, size: 14),
+                    const SizedBox(width: 5),
+                    Text(
+                      isTimed
+                          ? '${_currentExercise?.duration ?? 30}s Hold'
+                          : 'REPS ${_repCounter.repCount} / ${_currentExercise?.reps ?? 8}',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // Bottom Left: CV Telemetry Diagnostic Badge (L: x,y | R: x,y | DELTA: +%)
+            Positioned(
+              bottom: 42,
+              left: 10,
+              right: 80,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A).withValues(alpha: 0.88),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white24),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.analytics_outlined, color: Colors.tealAccent, size: 13),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text(
+                        feedback.diagnosticText,
+                        style: const TextStyle(color: Colors.white, fontSize: 10.0, fontWeight: FontWeight.w600),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // Bottom Right: Real-Time Form Quality Score
+            Positioned(
+              bottom: 42,
+              right: 10,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A).withValues(alpha: 0.88),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: statusColor.withValues(alpha: 0.6)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.verified_rounded, color: statusColor, size: 13),
+                    const SizedBox(width: 4),
                     Text(
                       scoreText,
-                      style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 12),
+                      style: TextStyle(color: statusColor, fontWeight: FontWeight.w800, fontSize: 11),
                     ),
-                    const SizedBox(width: 8),
-                    Text(
-                      guidanceText,
-                      style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w500),
+                  ],
+                ),
+              ),
+            ),
+
+            // Bottom Center Floating Guidance Banner
+            Positioned(
+              bottom: 8,
+              left: 16,
+              right: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A).withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white12),
+                  boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 6)],
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.tips_and_updates_rounded, color: Color(0xFFFBBF24), size: 14),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        guidanceText,
+                        style: const TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.w600),
+                        textAlign: TextAlign.center,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ],
                 ),
