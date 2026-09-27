@@ -151,24 +151,38 @@ class _ExercisePageState extends State<ExercisePage> {
                 );
 
                 if (pose != null && mounted) {
-                  debugPrint("POSE CALLBACK RECEIVED");
-                  final repCompleted = _repCounter.processPose(pose, _currentExercise?.name ?? '');
-                  if (repCompleted && _isExerciseInProgress && !_isBreakTime) {
-                    final target = _currentExercise?.reps ?? 8;
-                    if (!_isMuted) {
-                      _flutterTts.speak("Rep ${_repCounter.repCount}");
-                    }
-                    if (_repCounter.repCount >= target) {
-                      _onExerciseComplete();
-                    }
-                  }
+  final exerciseName =
+      _currentExercise?.name ?? '';
 
-                  if (mounted) {
-                    setState(() {
-                      _currentPose = pose;
-                    });
-                  }
-                }
+  final repCompleted =
+      _repCounter.processPose(
+    pose,
+    exerciseName,
+  );
+
+  if (repCompleted &&
+      _isExerciseInProgress &&
+      !_isBreakTime) {
+    final target =
+        _currentExercise?.reps ?? 8;
+
+    if (!_isMuted) {
+      _flutterTts.speak(
+        "Rep ${_repCounter.repCount}",
+      );
+    }
+
+    if (_repCounter.repCount >= target) {
+      _onExerciseComplete();
+    }
+  }
+
+  if (mounted) {
+    setState(() {
+      _currentPose = pose;
+    });
+  }
+}
               });
             }
           }
@@ -659,18 +673,16 @@ class _ExercisePageState extends State<ExercisePage> {
   // Flag to track if video is currently being shown
   bool _isShowingVideo = false;
 
-  List<Exercise> _getExercises() {
-    // Get all exercises for the current pain type
-    final allExercises = _exercisesByPain[widget.exerciseType] ?? [];
+ List<Exercise> _getExercises() {
+  // TEMPORARY: expose ALL exercises so we can test
+  // pose detection and rep counting for every exercise.
 
-    // If no exercises available for the pain type, return empty list
-    if (allExercises.isEmpty) {
-      return [];
-    }
+  final allExercises = _exercisesByPain.values
+      .expand((exerciseList) => exerciseList)
+      .toList();
 
-    // Default to 3 exercises
-    return allExercises.take(3).toList();
-  }
+  return allExercises;
+}
 
   void _loadExercises() {
     setState(() {
@@ -1592,8 +1604,8 @@ class _ExercisePageState extends State<ExercisePage> {
               itemCount: _exercises.length,
               itemBuilder: (context, index) {
                 final exercise = _exercises[index];
-                final originalDuration =
-                    _exercisesByPain[widget.exerciseType]![index].duration;
+                final originalDuration = exercise.duration;
+             
                 final adjustedDuration = exercise.duration;
                 final intensityMultiplier = adjustedDuration / originalDuration;
 
@@ -2068,7 +2080,7 @@ class _ExercisePageState extends State<ExercisePage> {
     final isTimed = _currentExercise != null && _currentExercise!.name.toLowerCase().contains('stretch');
 
     return Container(
-      height: 310,
+      height: MediaQuery.of(context).size.height * 0.65,
       width: double.infinity,
       decoration: BoxDecoration(
         color: const Color(0xFF0F172A),
@@ -2189,31 +2201,68 @@ class _ExercisePageState extends State<ExercisePage> {
             ),
 
             // Top Right: AI Rep Counter / Timer Badge
-            Positioned(
-              top: 10,
-              right: 10,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF059669).withValues(alpha: 0.92),
-                  borderRadius: BorderRadius.circular(10),
-                  boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 6)],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(isTimed ? Icons.timer_rounded : Icons.fitness_center_rounded, color: Colors.white, size: 14),
-                    const SizedBox(width: 5),
-                    Text(
-                      isTimed
-                          ? '${_currentExercise?.duration ?? 30}s Hold'
-                          : 'REPS ${_repCounter.repCount} / ${_currentExercise?.reps ?? 8}',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 11),
-                    ),
-                  ],
-                ),
+            // TOP RIGHT: LARGE REP COUNTER
+Positioned(
+  top: 16,
+  right: 16,
+  child: Container(
+    padding: const EdgeInsets.symmetric(
+      horizontal: 16,
+      vertical: 10,
+    ),
+    decoration: BoxDecoration(
+      color: const Color(0xFF059669).withValues(alpha: 0.95),
+      borderRadius: BorderRadius.circular(16),
+      boxShadow: const [
+        BoxShadow(
+          color: Colors.black54,
+          blurRadius: 8,
+          offset: Offset(0, 3),
+        ),
+      ],
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              isTimed
+                  ? Icons.timer_rounded
+                  : Icons.fitness_center_rounded,
+              color: Colors.white,
+              size: 18,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              isTimed ? 'HOLD' : 'REPS',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1,
               ),
             ),
+          ],
+        ),
+
+        const SizedBox(height: 2),
+
+        Text(
+          isTimed
+              ? '${_currentExercise?.duration ?? 30}s'
+              : '${_repCounter.repCount} / ${_currentExercise?.reps ?? 8}',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 28,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ],
+    ),
+  ),
+),
 
             // Bottom Left: CV Telemetry Diagnostic Badge (L: x,y | R: x,y | DELTA: +%)
             Positioned(

@@ -111,90 +111,145 @@ class _MoodSelectionScreenState extends State<MoodSelectionScreen>
     super.dispose();
   }
 
-  Future<void> _goToExercisePage() async {
+ Future<void> _goToExercisePage() async {
+  setState(() {
+    _isLoading = true;
+  });
+
+  try {
+    // Convert answers to numerical values (0-3)
+    final answers = questions.map((q) {
+      final selectedAnswer = q['selectedAnswer'] as String;
+      return q['answers'].indexOf(selectedAnswer);
+    }).toList().cast<int>();
+
+    print('User answers converted to numbers: $answers');
+
+    // Get mood & intensity prediction from XGBoost ML model
+    final xgbResult = await _mlService.predictMoodWithXGBoost(answers);
+
+    final predictedMood = xgbResult.predictedMood;
+
+    print('Predicted mood: $predictedMood');
+    print('Confidence: ${xgbResult.confidenceScore}');
+    print('Recommended intensity: ${xgbResult.recommendedIntensity}');
+
+    // Update user's mood
+    final authProvider = Provider.of<AuthProvider>(
+      context,
+      listen: false,
+    );
+
+    await authProvider.updateUserMood(predictedMood);
+
+    if (!mounted) return;
+
     setState(() {
-      _isLoading = true;
+      _isLoading = false;
     });
 
-    try {
-      // Convert answers to numerical values (0-3)
-      final answers = questions.map((q) {
-        final selectedAnswer = q['selectedAnswer'] as String;
-        return q['answers'].indexOf(selectedAnswer);
-      }).toList().cast<int>();
+    // Navigate directly to ExercisePage
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            ExercisePage(
+          userId: authProvider.user?.uid ?? '',
+          mood: predictedMood,
+          exerciseType: widget.category,
+          healthCondition: 'general',
+        ),
+        transitionsBuilder:
+            (context, animation, secondaryAnimation, child) {
+          const begin = Offset(1.0, 0.0);
+          const end = Offset.zero;
+          const curve = Curves.easeInOutCubic;
 
-      print('User answers converted to numbers: $answers');
-
-      // Get mood & intensity prediction from XGBoost ML model
-      final xgbResult = await _mlService.predictMoodWithXGBoost(answers);
-      final predictedMood = xgbResult.predictedMood;
-      final confidencePct = (xgbResult.confidenceScore * 100).toStringAsFixed(1);
-      final intensity = xgbResult.recommendedIntensity;
-
-
-      // Update user's mood in AuthProvider
-      final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      await authProvider.updateUserMood(predictedMood);
-
-      setState(() {
-        _isLoading = false;
-      });
-
-      if (mounted) {
-        // Show rich XGBoost Model Analysis Modal Dialog
-        _showXGBoostAnalysisModal(context, xgbResult, authProvider.user?.uid ?? '');
-      }
-    } catch (e) {
-      print('Error in mood prediction: $e');
-      setState(() {
-        _isLoading = false;
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Error predicting mood. Using default mood.'),
-            backgroundColor: Colors.red,
-            duration: Duration(seconds: 2),
-          ),
-        );
-        
-        // Add a small delay to show the error message
-        await Future.delayed(const Duration(seconds: 2));
-
-        // Navigate with default mood
-        if (mounted) {
-          Navigator.push(
-            context,
-            PageRouteBuilder(
-              pageBuilder: (context, animation, secondaryAnimation) => ExercisePage(
-                userId: Provider.of<AuthProvider>(context, listen: false).user?.uid ?? '',
-                mood: 'Neutral',
-                exerciseType: widget.category,
-                healthCondition: 'general',
-              ),
-              transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                const begin = Offset(1.0, 0.0);
-                const end = Offset.zero;
-                const curve = Curves.easeInOutCubic;
-                var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
-                return SlideTransition(
-                  position: animation.drive(tween),
-                  child: child,
-                );
-              },
-              transitionDuration: const Duration(milliseconds: 500),
-            ),
+          final tween = Tween(
+            begin: begin,
+            end: end,
+          ).chain(
+            CurveTween(curve: curve),
           );
-        }
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
+
+          return SlideTransition(
+            position: animation.drive(tween),
+            child: child,
+          );
+        },
+        transitionDuration: const Duration(milliseconds: 500),
+      ),
+    );
+  } catch (e) {
+    print('Error in mood prediction: $e');
+
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Error predicting mood. Using default mood.',
+          ),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 2),
+        ),
+      );
+
+      await Future.delayed(
+        const Duration(seconds: 2),
+      );
+
+      if (!mounted) return;
+
+      final authProvider = Provider.of<AuthProvider>(
+        context,
+        listen: false,
+      );
+
+      Navigator.push(
+        context,
+        PageRouteBuilder(
+          pageBuilder:
+              (context, animation, secondaryAnimation) =>
+                  ExercisePage(
+            userId: authProvider.user?.uid ?? '',
+            mood: 'Neutral',
+            exerciseType: widget.category,
+            healthCondition: 'general',
+          ),
+          transitionsBuilder:
+              (context, animation, secondaryAnimation, child) {
+            const begin = Offset(1.0, 0.0);
+            const end = Offset.zero;
+            const curve = Curves.easeInOutCubic;
+
+            final tween = Tween(
+              begin: begin,
+              end: end,
+            ).chain(
+              CurveTween(curve: curve),
+            );
+
+            return SlideTransition(
+              position: animation.drive(tween),
+              child: child,
+            );
+          },
+          transitionDuration: const Duration(milliseconds: 500),
+        ),
+      );
+    }
+  } finally {
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
     }
   }
+}
 
   void _selectAnswer(String answer) {
     setState(() {
